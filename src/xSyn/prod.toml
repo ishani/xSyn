@@ -1,0 +1,12 @@
+[server]
+release_mode = true
+service_message = "Ready to work!"
+max_sync_size_kb = 800
+port = 8080
+status_route = "/stat"
+
+[bolt]
+file = "marks.db"
+init_timeout = 5
+
+
