@@ -3,12 +3,12 @@ Compact server implementing xBrowserSync API using Golang and BoltDB.
 
 Easy to deploy via Docker, xSyn provides a lean server for privately hosting your own bookmarks sync store. As of writing, [xBrowserSync](https://www.xbrowsersync.org/) is available for Chrome, Android and iOS. 
 
-###DockerHub
+### DockerHub
 A recent build is available at [hdenholm/xsyn:latest](https://hub.docker.com/r/hdenholm/xsyn/)
 
 If running locally, ensure you map a volume to `/data` so that the BoltDB file persists.
 
-###Azure
+### Azure
 I have a test instance running on Azure using their slightly restrictive Docker support for App Services. 
 
 In Application Settings, make sure `WEBSITES_ENABLE_APP_SERVICE_STORAGE` is enabled. With a default configuration file, add `WEBSITES_PORT` and set it to 8080. 
