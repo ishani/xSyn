@@ -34,6 +34,13 @@ var zLog, _ = zap.NewProduction()
 // names for buckets where we hide our data
 var boltDataBucket = []byte("BM")
 var boltTimestampBucket = []byte("TS")
+var boltVersionBucket = []byte("VR")
+
+// CreateBookmarkData is received in POST /bookmarks
+type CreateBookmarkData struct {
+	ClientVersion string `json:"version"`
+}
+
 
 func main() {
 
@@ -61,6 +68,10 @@ func main() {
 		if err != nil {
 			return fmt.Errorf("create bucket: %s", err)
 		}
+		_, err = tx.CreateBucketIfNotExists(boltVersionBucket)
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
 		return nil
 	})
 	if err != nil {
@@ -76,11 +87,13 @@ func main() {
 	router := gin.Default()
 	router.POST("/bookmarks", func(c *gin.Context) {
 
-		var bookmarkData RequestData
+		var bookmarkData CreateBookmarkData
 		if err := c.ShouldBindJSON(&bookmarkData); err != nil {
-			handleError(c, "MissingParameter", "No bookmarks provided", err)
+			handleError(c, "MissingParameter", "/bookmarks POST missing", err)
 			return
 		}
+
+		zLog.Info("New SyncID requested", zap.String("Client", bookmarkData.ClientVersion))
 
 		newID := "invalid"
 		imprintTime := createTimestampString()
@@ -89,6 +102,7 @@ func main() {
 
 			bkData := tx.Bucket(boltDataBucket)
 			bkTs := tx.Bucket(boltTimestampBucket)
+			bkVer := tx.Bucket(boltVersionBucket)
 
 			// fetch a new ID from the bucket
 			seqID, _ := bkData.NextSequence()
@@ -128,7 +142,11 @@ func main() {
 			// copy out the ID
 			newID = string(buf)
 
-			if err = bkData.Put(buf, []byte(bookmarkData.EncodedBookmarks)); err != nil {
+			if err = bkData.Put(buf, make([]byte, 0)); err != nil {
+				return err
+			}
+
+			if err = bkVer.Put(buf, []byte(bookmarkData.ClientVersion)); err != nil {
 				return err
 			}
 
@@ -145,6 +163,7 @@ func main() {
 		c.JSON(200, gin.H{
 			"id":          newID,
 			"lastUpdated": imprintTime,
+			"version":     bookmarkData.ClientVersion,
 		})
 	})
 
@@ -154,13 +173,17 @@ func main() {
 
 		var dataResult string
 		var tsResult string
+		var verResult string
+
 		err := db.View(func(tx *bolt.Tx) error {
 
 			bkData := tx.Bucket(boltDataBucket)
 			bkTs := tx.Bucket(boltTimestampBucket)
+			bkVer := tx.Bucket(boltVersionBucket)
 
 			data := bkData.Get(markIDBytes)
 			ts := bkTs.Get(markIDBytes)
+			ver := bkVer.Get(markIDBytes)
 
 			if data == nil {
 				return errors.New("data not found for key")
@@ -168,10 +191,14 @@ func main() {
 			if ts == nil {
 				return errors.New("timestamp not found for key")
 			}
+			if ver == nil {
+				return errors.New("version not found for key")
+			}
 
 			// copy out
 			dataResult = string(data)
 			tsResult = string(ts)
+			verResult = string(ver)
 
 			return nil
 		})
@@ -183,6 +210,7 @@ func main() {
 		c.JSON(200, gin.H{
 			"bookmarks":   dataResult,
 			"lastUpdated": tsResult,
+			"version":     verResult,
 		})
 	})
 
@@ -249,12 +277,53 @@ func main() {
 		c.String(200, "{}")
 	})
 
+	router.GET("/bookmarks/:id/version", func(c *gin.Context) {
+		markID := c.Param("id")
+		markIDBytes := []byte(markID)
+
+		var versionString string
+		err := db.View(func(tx *bolt.Tx) error {
+
+			bkVer := tx.Bucket(boltVersionBucket)
+
+			versionString = string(bkVer.Get(markIDBytes))
+			return nil
+		})
+
+		if handleError(c, "InternalError", "", err) {
+			return
+		}
+
+		if len(versionString) > 0 {
+			c.JSON(200, gin.H{
+				"version": versionString,
+			})
+			return
+		}
+
+		// return empty json table to signal 'not found'
+		c.String(200, "{}")
+	})
+
 	router.GET("/info", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"status":      1,
 			"message":     AppConfig.Server.ServiceMessage,
-			"version":     "1.0.0",
+			"version":     "1.1.4",
 			"maxSyncSize": 1024 * AppConfig.Server.MaxSyncSizeKb,
+		})
+	})
+
+	router.GET("/", func(c *gin.Context) {
+
+		t := template.New("frontpage")
+		t, _ = t.Parse(frontpageHTML)
+
+		// stream out the execution
+		c.Status(200)
+		c.Stream(func(w io.Writer) bool {
+			t.Execute(w, nil)
+			return false
 		})
 	})
 

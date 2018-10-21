@@ -1,0 +1,12 @@
+[server]
+release_mode = true
+service_message = "Hello from [github.com/ishani/xSyn] the compact Go server for xBrowserSync"
+max_sync_size_kb = 1000
+port = 8080
+status_route = "/stat"
+
+[bolt]
+file = "marks.db"
+init_timeout = 5
+
+
