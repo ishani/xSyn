@@ -1,0 +1,7 @@
+#!/bin/bash
+
+env GOOS=linux GOARCH=amd64 go build -o xsyn-deploy *.go
+docker build -f Dockerfile -t hdenholm/xsyn:latest .
+
+docker tag xsyn:latest hdenholm/xsyn:latest
+docker push hdenholm/xsyn:latest
