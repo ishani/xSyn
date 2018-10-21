@@ -1,7 +1,7 @@
 # xSyn
-Compact server implementing xBrowserSync API using Golang and BoltDB.
+Compact server implementing xBrowserSync API using Golang and BoltDB; supports API version 1.1.4 (Oct 2018)
 
-Easy to deploy via Docker, xSyn provides a lean server for privately hosting your own bookmarks sync store. As of writing, [xBrowserSync](https://www.xbrowsersync.org/) is available for Chrome, Android and iOS. 
+Easy to deploy via Docker, xSyn provides a lean server for privately hosting your own bookmarks sync store. As of writing, [xBrowserSync](https://www.xbrowsersync.org/) is available for Chrome, Firefox, Android and iOS. It's really good!
 
 ### DockerHub
 A recent build is available at [hdenholm/xsyn:latest](https://hub.docker.com/r/hdenholm/xsyn/)
