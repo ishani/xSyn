@@ -3,6 +3,15 @@ Compact server implementing xBrowserSync API using Golang and BoltDB; supports A
 
 Easy to deploy via Docker, xSyn provides a lean server for privately hosting your own bookmarks sync store. As of writing, [xBrowserSync](https://www.xbrowsersync.org/) is available for Chrome, Firefox, Android and iOS. It's really good!
 
+### Todo
+
+* Actually check and reject a bundle of data that exceeds the advertised limits
+* Rate limiting
+* Tests
+
+As it stands, xSyn works great for a private xBrowserSync server - I've been running with it for about a year - but bear in mind it doesn't have a lot of defence against people trying to flood or attack (yet)
+
+
 ### DockerHub
 A recent build is available at [hdenholm/xsyn:latest](https://hub.docker.com/r/hdenholm/xsyn/)
 
