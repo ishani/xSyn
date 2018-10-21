@@ -41,6 +41,10 @@ type CreateBookmarkData struct {
 	ClientVersion string `json:"version"`
 }
 
+// RequestData is received in the POST and PUT methods
+type RequestData struct {
+	EncodedBookmarks string `json:"bookmarks"`
+}
 
 func main() {
 
@@ -167,6 +171,7 @@ func main() {
 		})
 	})
 
+	// fetch the bookmarks data for the given SyncID
 	router.GET("/bookmarks/:id", func(c *gin.Context) {
 		markID := c.Param("id")
 		markIDBytes := []byte(markID)
@@ -214,6 +219,7 @@ func main() {
 		})
 	})
 
+	// replace bookmarks data for the given SyncID
 	router.PUT("/bookmarks/:id", func(c *gin.Context) {
 		markID := c.Param("id")
 		markIDBytes := []byte(markID)
@@ -249,6 +255,7 @@ func main() {
 		})
 	})
 
+	// return the timestamp of the last update for the given SyncID
 	router.GET("/bookmarks/:id/lastUpdated", func(c *gin.Context) {
 		markID := c.Param("id")
 		markIDBytes := []byte(markID)
@@ -277,6 +284,7 @@ func main() {
 		c.String(200, "{}")
 	})
 
+	// return the client version used to create the SyncID
 	router.GET("/bookmarks/:id/version", func(c *gin.Context) {
 		markID := c.Param("id")
 		markIDBytes := []byte(markID)
@@ -314,6 +322,8 @@ func main() {
 		})
 	})
 
+	// show a basic front page
+	// .. passing in nil for the data means we don't show any statistics
 	router.GET("/", func(c *gin.Context) {
 
 		t := template.New("frontpage")
@@ -327,6 +337,9 @@ func main() {
 		})
 	})
 
+	// .. unlike for this route, which shows the front page but
+	// also a bunch of internal stats from BoltDB; the URL for this page
+	// can be set in config to something obfuscated if desired
 	router.GET(AppConfig.Server.StatusRoute, func(c *gin.Context) {
 
 		// snag the bolt stats; break the TxStats map out
@@ -374,11 +387,6 @@ func main() {
 
 	launchString := fmt.Sprintf(":%d", AppConfig.Server.Port)
 	router.Run(launchString)
-}
-
-// RequestData is received in the POST and PUT methods
-type RequestData struct {
-	EncodedBookmarks string `json:"bookmarks"`
 }
 
 // xbs seems to want a 409 when things go wrong; this is a simple wrapper to generate
