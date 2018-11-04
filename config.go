@@ -30,8 +30,9 @@ import (
 )
 
 type tomlConfig struct {
-	Server tomlServer
-	Bolt   tomlBolt
+	Server   tomlServer
+	Bolt     tomlBolt
+	Security tomlSecurity
 }
 type tomlBolt struct {
 	StorageFile string `toml:"file" env:"XS_BOLT_FILE"`
@@ -43,6 +44,14 @@ type tomlServer struct {
 	MaxSyncSizeKb  int32  `toml:"max_sync_size_kb" env:"XS_SRV_MAXSYNC"`
 	Port           int32  `toml:"port" env:"XS_SRV_PORT"`
 	StatusRoute    string `toml:"status_route" env:"XS_SRV_STATUS"`
+}
+type tomlSecurity struct {
+	ReqPerSecond     float64 `toml:"max_requests_per_second" env:"XS_SEC_RPS"`
+	AcceptNewSyncs   bool    `toml:"accept_new_syncs" env:"XS_SEC_ACCEPT_NEW_SYNC"`
+	SyncToggleRoute  string  `toml:"sync_toggle_route" env:"XS_SEC_SYNCTOGGLE"`
+	TLSCert          string  `toml:"tls_cert" env:"XS_SEC_TLSCERT"`
+	UseLetsEncrypt   string  `toml:"lets_encrypt" env:"XS_SEC_LE"`
+	LetsEncryptCache string  `toml:"lets_encrypt_cache" env:"XS_SEC_LE_CACHE"`
 }
 
 // AppConfig is the config data parsed from disk
@@ -105,7 +114,7 @@ func checkOverrides(configData interface{}, cfgLog *zap.Logger) error {
 
 			overrideFromEnv := os.Getenv(envOverride)
 			if overrideFromEnv != "" {
-				cfgLog.Info("Overriding config",
+				cfgLog.Debug("Overriding config",
 					zap.String("key", envOverride),
 					zap.String("value", overrideFromEnv),
 				)
@@ -120,6 +129,13 @@ func checkOverrides(configData interface{}, cfgLog *zap.Logger) error {
 						return err
 					}
 					field.Set(reflect.ValueOf(int32(ivalue)))
+
+				case reflect.Float64:
+					fvalue, err := strconv.ParseFloat(overrideFromEnv, 64)
+					if err != nil {
+						return err
+					}
+					field.Set(reflect.ValueOf(float64(fvalue)))
 
 				case reflect.Bool:
 					bvalue, err := strconv.ParseBool(overrideFromEnv)

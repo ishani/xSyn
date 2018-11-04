@@ -11,5 +11,6 @@ WORKDIR /app
 COPY prod.toml /app/
 COPY xsyn-deploy /app/
 
-EXPOSE 8080
+EXPOSE 80
+EXPOSE 443
 ENTRYPOINT ["./xsyn-deploy"]

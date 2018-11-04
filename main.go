@@ -20,16 +20,27 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"os"
 	"time"
 
 	"github.com/boltdb/bolt"
+	"github.com/didip/tollbooth"
+	"github.com/didip/tollbooth/limiter"
+	"github.com/didip/tollbooth_gin"
 	"github.com/fatih/structs"
+	"github.com/gin-contrib/size"
+	"github.com/gin-gonic/autotls"
 	"github.com/gin-gonic/gin"
 	uuid "github.com/satori/go.uuid"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/acme/autocert"
 )
 
+// tbd; make the Debug/Prod choice here configurable
 var zLog, _ = zap.NewProduction()
+
+// BuildStamp can be written to externally during a go build to apply a build-time string, like a timestamp
+var BuildStamp string = "[unstamped]"
 
 // names for buckets where we hide our data
 var boltDataBucket = []byte("BM")
@@ -46,10 +57,35 @@ type RequestData struct {
 	EncodedBookmarks string `json:"bookmarks"`
 }
 
+// by default we accept new sync IDs - ie. new users for the service;
+// this can be overridden in the config and toggled live, if required
+var newSyncsAllowed = true
+
+func synAcceptTOS(tosURL string) bool {
+	zLog.Info("Autocert TOS", zap.String("URL", tosURL))
+	return true
+}
+
 func main() {
 
 	// fetch config from toml, apply env overrides, etc
 	LoadConfig()
+
+	// log out the build stamp and record when we booted up to show on /stats
+	// helps me ensure that webhooks et al are firing and servers are up to date as expected
+	zLog.Info("xSyn", zap.String("Build", BuildStamp))
+	bootTime := time.Now().UTC()
+
+	// if a cache path was given for LetsEncrypt, trial-run the creation of it
+	// so we know early on that the storage has been configured correctly
+	if len(AppConfig.Security.LetsEncryptCache) > 0 {
+		if err := os.MkdirAll(AppConfig.Security.LetsEncryptCache, 0700); err != nil {
+			zLog.Panic("LE cache path test",
+				zap.String("path", AppConfig.Security.LetsEncryptCache),
+				zap.Error(err),
+			)
+		}
+	}
 
 	// open or create the Bolt DB storage file
 	db, err := bolt.Open(
@@ -62,7 +98,7 @@ func main() {
 	}
 	defer db.Close()
 
-	// ensure the bucket collection exists
+	// ensure the bucket collection exists, create them if not
 	err = db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists(boltDataBucket)
 		if err != nil {
@@ -82,14 +118,53 @@ func main() {
 		zLog.Panic("Bucket creation", zap.Error(err))
 	}
 
-	// switch to release
+	db.Sync()
+	if _, err := os.Stat(AppConfig.Bolt.StorageFile); os.IsNotExist(err) {
+		zLog.Panic("BoltDB file check", zap.Error(err))
+	}
+
+	// switch to release?
 	if AppConfig.Server.ReleaseMode {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	// line up the routes
+	// build a Gin instance with default middleware
 	router := gin.Default()
+
+	// apply rate limiting middleware if specified
+	if AppConfig.Security.ReqPerSecond > 0 {
+
+		zLog.Info("Adding rate-limiting", zap.Float64("RPS", AppConfig.Security.ReqPerSecond))
+
+		// I've chosen a fairly arbitrary burst limit to allow XBS to poll a few things during a sync without
+		// exhausting the limits immediately as this limit is applied to all routes
+		limiter := tollbooth.NewLimiter(AppConfig.Security.ReqPerSecond, &limiter.ExpirableOptions{DefaultExpirationTTL: time.Hour})
+		limiter.SetBurst(20)
+		router.Use(tollbooth_gin.LimitHandler(limiter))
+	}
+
+	// magic route to toggle new-sync option
+	if len(AppConfig.Security.SyncToggleRoute) > 0 {
+
+		zLog.Info("Enabling sync toggling route")
+
+		router.GET(AppConfig.Security.SyncToggleRoute, func(c *gin.Context) {
+			newSyncsAllowed = !newSyncsAllowed
+			c.String(200, fmt.Sprintf("Toggled accept_new_syncs to [%t]", newSyncsAllowed))
+		})
+	}
+
+	// route to create a new sync ID
 	router.POST("/bookmarks", func(c *gin.Context) {
+
+		// sorry, we're closed for business
+		if newSyncsAllowed == false {
+			c.JSON(409, gin.H{
+				"code":    "NotAllowed",
+				"message": "Not accepting new sync users",
+			})
+			return
+		}
 
 		var bookmarkData CreateBookmarkData
 		if err := c.ShouldBindJSON(&bookmarkData); err != nil {
@@ -97,7 +172,7 @@ func main() {
 			return
 		}
 
-		zLog.Info("New SyncID requested", zap.String("Client", bookmarkData.ClientVersion))
+		zLog.Debug("New SyncID requested", zap.String("Client", bookmarkData.ClientVersion))
 
 		newID := "invalid"
 		imprintTime := createTimestampString()
@@ -140,7 +215,12 @@ func main() {
 				// will loop forever, paranoia suggests we should have
 				// a counter and terminate after N runs
 				uniqueIDRetryCount++
-				zLog.Info("Duplicate UUID, retrying", zap.Int("Count", uniqueIDRetryCount))
+				zLog.Warn("Duplicate UUID, retrying", zap.Int("Count", uniqueIDRetryCount))
+
+				// .. so do that
+				if uniqueIDRetryCount > 8 {
+					return fmt.Errorf("too many UUID collisions")
+				}
 			}
 
 			// copy out the ID
@@ -162,7 +242,7 @@ func main() {
 			return
 		}
 
-		zLog.Info("New key created", zap.String("key", newID))
+		zLog.Debug("New key created", zap.String("key", newID))
 
 		c.JSON(200, gin.H{
 			"id":          newID,
@@ -219,41 +299,46 @@ func main() {
 		})
 	})
 
-	// replace bookmarks data for the given SyncID
-	router.PUT("/bookmarks/:id", func(c *gin.Context) {
-		markID := c.Param("id")
-		markIDBytes := []byte(markID)
+	maxSyncSizeBytes := int64(1024 * AppConfig.Server.MaxSyncSizeKb)
 
-		var bookmarkData RequestData
-		if err := c.ShouldBindJSON(&bookmarkData); err != nil {
-			handleError(c, "MissingParameter", "No bookmarks provided", err)
-			return
-		}
+	sizeLimitedRoutes := router.Group("/", limits.RequestSizeLimiter(maxSyncSizeBytes))
+	{
+		// replace bookmarks data for the given SyncID
+		sizeLimitedRoutes.PUT("/bookmarks/:id", func(c *gin.Context) {
+			markID := c.Param("id")
+			markIDBytes := []byte(markID)
 
-		imprintTime := createTimestampString()
-
-		err = db.Update(func(tx *bolt.Tx) error {
-
-			bkData := tx.Bucket(boltDataBucket)
-
-			if err = bkData.Put(markIDBytes, []byte(bookmarkData.EncodedBookmarks)); err != nil {
-				return err
+			var bookmarkData RequestData
+			if err := c.ShouldBindJSON(&bookmarkData); err != nil {
+				handleError(c, "MissingParameter", "No bookmarks provided", err)
+				return
 			}
 
-			bkTs := tx.Bucket(boltTimestampBucket)
+			imprintTime := createTimestampString()
 
-			err = bkTs.Put(markIDBytes, []byte(imprintTime))
-			return err
+			err = db.Update(func(tx *bolt.Tx) error {
+
+				bkData := tx.Bucket(boltDataBucket)
+
+				if err = bkData.Put(markIDBytes, []byte(bookmarkData.EncodedBookmarks)); err != nil {
+					return err
+				}
+
+				bkTs := tx.Bucket(boltTimestampBucket)
+
+				err = bkTs.Put(markIDBytes, []byte(imprintTime))
+				return err
+			})
+
+			if handleError(c, "InternalError", "", err) {
+				return
+			}
+
+			c.JSON(200, gin.H{
+				"lastUpdated": imprintTime,
+			})
 		})
-
-		if handleError(c, "InternalError", "", err) {
-			return
-		}
-
-		c.JSON(200, gin.H{
-			"lastUpdated": imprintTime,
-		})
-	})
+	}
 
 	// return the timestamp of the last update for the given SyncID
 	router.GET("/bookmarks/:id/lastUpdated", func(c *gin.Context) {
@@ -314,11 +399,18 @@ func main() {
 	})
 
 	router.GET("/info", func(c *gin.Context) {
+
+		serviceStatus := 1
+		if newSyncsAllowed == false {
+			serviceStatus = 3
+		}
+
 		c.JSON(200, gin.H{
-			"status":      1,
+			"status":      serviceStatus,
 			"message":     AppConfig.Server.ServiceMessage,
-			"version":     "1.1.4",
-			"maxSyncSize": 1024 * AppConfig.Server.MaxSyncSizeKb,
+			"version":     "1.1.5",
+			"buildstamp":  BuildStamp,
+			"maxSyncSize": maxSyncSizeBytes,
 		})
 	})
 
@@ -367,7 +459,9 @@ func main() {
 		dbstat := make(map[string]interface{})
 		dbstat["key count"] = keyCount
 		dbstat["db size (bytes)"] = dbSize
-		datamap["Data Bucket"] = dbstat
+		dbstat["build stamp"] = BuildStamp
+		dbstat["boot time"] = bootTime.Format(time.RFC850)
+		datamap["State"] = dbstat
 
 		// .. and then the other maps extracted from bolt
 		datamap["Bolt-Db"] = stats
@@ -386,7 +480,35 @@ func main() {
 	})
 
 	launchString := fmt.Sprintf(":%d", AppConfig.Server.Port)
-	router.Run(launchString)
+
+	if len(AppConfig.Security.TLSCert) > 0 {
+
+		zLog.Info("Starting server", zap.String("mode", "https"))
+
+		zLog.Fatal("exited", zap.Error(router.RunTLS(
+			launchString,
+			fmt.Sprintf("%s.pem", AppConfig.Security.TLSCert),
+			fmt.Sprintf("%s.key", AppConfig.Security.TLSCert),
+		)))
+
+	} else if len(AppConfig.Security.UseLetsEncrypt) > 0 {
+
+		zLog.Info("Starting server", zap.String("mode", "https-lets-encrypt"))
+
+		autocertmgr := autocert.Manager{
+			Prompt:     synAcceptTOS,
+			HostPolicy: autocert.HostWhitelist(AppConfig.Security.UseLetsEncrypt),
+			Cache:      autocert.DirCache(AppConfig.Security.LetsEncryptCache),
+		}
+
+		zLog.Fatal("exited", zap.Error(autotls.RunWithManager(router, &autocertmgr)))
+
+	} else {
+
+		zLog.Info("Starting server", zap.String("mode", "http"))
+
+		zLog.Fatal("exited", zap.Error(router.Run(launchString)))
+	}
 }
 
 // xbs seems to want a 409 when things go wrong; this is a simple wrapper to generate

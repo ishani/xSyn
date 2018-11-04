@@ -1,6 +1,11 @@
 #!/bin/bash
 
-env GOOS=linux GOARCH=amd64 go build -o xsyn-deploy *.go
+# Define a timestamp function
+timestamp() {
+  date +"%Y-%m-%d_%H-%M-%S"
+}
+
+env GOOS=linux GOARCH=amd64 go build -ldflags "-X main.BuildStamp=$(timestamp)" -o xsyn-deploy *.go
 docker build -f Dockerfile -t hdenholm/xsyn:latest .
 
 docker tag xsyn:latest hdenholm/xsyn:latest

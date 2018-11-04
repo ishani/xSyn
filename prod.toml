@@ -1,12 +1,24 @@
+# configuration k:v             # envvar override    # usage
+
 [server]
-release_mode = true
-service_message = "Hello from [github.com/ishani/xSyn] the compact Go server for xBrowserSync"
-max_sync_size_kb = 1000
-port = 8080
-status_route = "/stat"
+service_message = "Hello from [github.com/ishani/xSyn], the compact Go server for xBrowserSync"
+release_mode = true             # XS_SRV_RELEASE     # run Gin in release mode, hiding all debug and verbose logging
+max_sync_size_kb = 500          # XS_SRV_MAXSYNC     # maximum amount of data to allow per SyncID (remember it comes in compressed, so 500kb is _a lot_ of bookmarks)
+port = 80                       # XS_SRV_PORT        # port to serve on;
+                                                     # NOTE: ..unless in Lets Encrypt mode, in which case both :80 and :443 are used and cannot be overridden
+status_route = "/stat"          # XS_SRV_STATUS      # route that shows more comprehensive server stats; obfuscate this if you like
+
+[security]
+max_requests_per_second = 1.5   # XS_SEC_RPS         # set to <= 0 to disable rate-limiting, otherwise N rps
+accept_new_syncs = true         # XS_SEC_ACCEPT_NEW_SYNC       
+                                                     # false to disable any new XBS SyncIDs to be made (ie. no new users)
+sync_toggle_route = ""          # XS_SEC_SYNCTOGGLE  # path that, if visited, toggles the runtime state of 'Accept New Syncs'. Set to "" to disable this feature.
+                                                     # example : "/vnXNXLZU4oSzVnEFjnmfQ9cBBYUkTu"
+tls_cert = ""                   # XS_SEC_TLSCERT     # file prefix for SSL certs - if supplied, runs with TLS (eg. MyCert.pem and MyCert.key)
+                                                     # NOTE: this takes priority over LE options below
+lets_encrypt = ""               # XS_SEC_LE          # supply a domain name to enable autotls manager; uses go's autocert acme library
+lets_encrypt_cache = ""         # XS_SEC_LE_CACHE    # path to directory to store LE cache, or "" to use in-memory cache (not generally recommended)
 
 [bolt]
-file = "marks.db"
+file = "marks.db"               # XS_BOLT_FILE       # path to where to store the database
 init_timeout = 5
-
-
