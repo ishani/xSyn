@@ -18,7 +18,7 @@ It is possible to run a special route that toggles the `Accepting New Syncs` val
 
 Rate-limiting is enabled by default on all routes and is easily configurable.
 
---
+---
 
 ### DockerHub
 
@@ -42,8 +42,8 @@ xSyn works on ECS easily, including full *Let's Encrypt* support if you assign a
 
 I have a simple example task template [over here](https://gist.github.com/ishani/06a99050500069319493facd31b6576e) - tested, but not a lot. Note this has LE enabled, so either disable that or set your own domain name up before you kick it off.
 
+---
 
---
 #### Todo
 
 * Tests
